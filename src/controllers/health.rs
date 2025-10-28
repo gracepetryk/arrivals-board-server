@@ -1,8 +1,9 @@
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 
-pub fn router() -> Router {
-    return Router::new()
-        .route("/", get(healthcheck))
+use crate::AppContext;
+
+pub fn router() -> Router<AppContext> {
+    return Router::new().route("/", get(healthcheck));
 }
 
 async fn healthcheck() -> String {
