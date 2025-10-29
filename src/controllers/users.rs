@@ -5,32 +5,54 @@ use axum::{
 };
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
     AppContext, AppError,
-    models::user::{TrackingParams, User},
-    schema::{tracking_params, users},
+    models::{TrackingParams, User},
+    schema::users,
 };
 
 pub fn router() -> Router<AppContext> {
     return Router::new().route("/{username}", get(get_user));
 }
 
-struct UserResult {
+#[derive(Serialize)]
+struct UserResultInner {
+    #[serde(flatten)]
     user: User,
+
+    #[serde(flatten)]
     tracking_params: Vec<TrackingParams>,
 }
+
+#[derive(Serialize)]
+struct UserResult {
+    user: UserResultInner,
+}
+
 async fn get_user(
     State(app_context): State<AppContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<UserResult>, AppError> {
-    let conn = &mut app_context.db.get().await?;
+    let mut conn = app_context.db.get().await?;
+
     let user = users::table
         .select(User::as_select())
         .find(id)
-        .first(conn)
+        .first(&mut conn)
         .await?;
 
-    return Ok(Json(user));
+    let tracking_params = TrackingParams::belonging_to(&user)
+        .select(TrackingParams::as_select())
+        .load(&mut conn)
+        .await?;
+
+    return Ok(Json(UserResult {
+        user: UserResultInner {
+            user: user,
+            tracking_params: tracking_params,
+        },
+    }));
 }

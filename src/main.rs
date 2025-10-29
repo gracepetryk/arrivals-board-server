@@ -1,14 +1,17 @@
-use axum::{http::StatusCode, response::IntoResponse};
-use diesel_async::{AsyncPgConnection, pooled_connection::bb8::Pool};
+use std::fmt::Debug;
+
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use diesel_async::AsyncPgConnection;
+use diesel_async::pooled_connection::{AsyncDieselConnectionManager, bb8::Pool};
 
 mod controllers;
 mod models;
 mod router;
 mod schema;
 
-type ConnectionPool = Pool<AsyncPgConnection>;
-
 #[allow(dead_code)]
+#[derive(Debug)]
 struct AppError(anyhow::Error);
 
 impl<E> From<E> for AppError
@@ -22,29 +25,39 @@ where
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "An internal server error occured.",
-        )
-            .into_response()
+        let resp = match self.0.downcast() {
+            Ok(diesel::NotFound) => (StatusCode::NOT_FOUND, "Requested resource not found."),
+            Err(_) | Ok(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "An internal server error occured.",
+            ),
+        };
+
+        resp.into_response()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct AppContext {
-    db: ConnectionPool,
+    db: Pool<AsyncPgConnection>,
 }
 
-fn get_connection_pool() -> ConnectionPool {
-    todo!()
+async fn get_connection_pool(connection_url: String) -> Result<Pool<AsyncPgConnection>, AppError> {
+    let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(connection_url);
+    Ok(Pool::builder().build(manager).await?)
 }
 
 #[tokio::main]
 async fn main() {
-    let db = AppContext {
-        db: get_connection_pool(),
+    // this will crash if we can't connect to the db or the environment variable isn't available,
+    // but it'll be ok to just let nginx handle the error page for now.
+    let connection_url = std::env::var("DATABASE_URL").unwrap();
+
+    let context = AppContext {
+        db: get_connection_pool(connection_url).await.unwrap(),
     };
-    let app = router::route(db);
+
+    let app = router::route(context);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     axum::serve(listener, app).await.unwrap();
