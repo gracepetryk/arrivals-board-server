@@ -1,6 +1,8 @@
+use anyhow::Context;
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::StatusCode,
     routing::get,
 };
 use diesel::prelude::*;
@@ -9,7 +11,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    AppContext, AppError,
+    AppContext,
     models::{TrackingParams, User},
     schema::users,
 };
@@ -35,14 +37,15 @@ struct UserResult {
 async fn get_user(
     State(app_context): State<AppContext>,
     Path(id): Path<Uuid>,
-) -> Result<Json<UserResult>, AppError> {
+) -> crate::Result<Json<UserResult>> {
     let mut conn = app_context.db.get().await?;
 
     let user = users::table
         .select(User::as_select())
         .find(id)
         .first(&mut conn)
-        .await?;
+        .await
+        .context(StatusCode::NOT_FOUND)?;
 
     let tracking_params = TrackingParams::belonging_to(&user)
         .select(TrackingParams::as_select())
