@@ -1,43 +1,51 @@
 use anyhow::Context;
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    routing::get,
+    routing::post,
 };
-use diesel::prelude::*;
+use diesel::{insert_into, prelude::*};
 use diesel_async::RunQueryDsl;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use crate::{
-    AppContext,
-    models::{TrackingParams, User},
-    schema::users,
-};
+use crate::{AppContext, AppError, models::User, schema::users};
 
-pub fn router() -> Router<AppContext> {
-    return Router::new().route("/{username}", get(get_user));
+pub fn router() -> OpenApiRouter<AppContext> {
+    return OpenApiRouter::new()
+        .routes(routes!(get_user))
+        .routes(routes!(get_all_users))
+        .route("/create", post(create_user));
 }
 
-#[derive(Serialize)]
-struct UserResultInner {
+#[derive(Serialize, utoipa::ToSchema)]
+struct UserResult {
     #[serde(flatten)]
     user: User,
-
-    #[serde(flatten)]
-    tracking_params: Vec<TrackingParams>,
 }
 
-#[derive(Serialize)]
-struct UserResult {
-    user: UserResultInner,
+impl UserResult {
+    fn new(user: User) -> Self {
+        UserResult { user: user }
+    }
 }
 
+#[utoipa::path(get, path = "/", responses((status = OK, body = Vec<User>)))]
+async fn get_all_users(State(app_context): State<AppContext>) -> Result<Json<Vec<User>>, AppError> {
+    let mut conn = app_context.db.get().await?;
+
+    let users: Vec<User> = users::table.load::<User>(&mut conn).await?;
+
+    return Ok(Json(users));
+}
+
+#[utoipa::path(get, path = "/{id}", responses((status = OK, body = UserResult)))]
 async fn get_user(
     State(app_context): State<AppContext>,
     Path(id): Path<Uuid>,
-) -> crate::Result<Json<UserResult>> {
+) -> Result<Json<UserResult>, AppError> {
     let mut conn = app_context.db.get().await?;
 
     let user = users::table
@@ -47,15 +55,26 @@ async fn get_user(
         .await
         .context(StatusCode::NOT_FOUND)?;
 
-    let tracking_params = TrackingParams::belonging_to(&user)
-        .select(TrackingParams::as_select())
-        .load(&mut conn)
-        .await?;
+    return Ok(Json(UserResult::new(user)));
+}
 
-    return Ok(Json(UserResult {
-        user: UserResultInner {
-            user: user,
-            tracking_params: tracking_params,
-        },
-    }));
+#[derive(Deserialize, Insertable, utoipa::ToSchema)]
+#[diesel(table_name = users)]
+struct CreateUser {
+    pub email: String,
+}
+
+async fn create_user(
+    State(app_context): State<AppContext>,
+    Json(user): Json<CreateUser>,
+) -> Result<Json<UserResult>, AppError> {
+    let mut conn = app_context.db.get().await?;
+
+    let query_result = insert_into(users::table)
+        .values(&vec![user])
+        .returning(users::all_columns)
+        .get_result::<User>(&mut conn)
+        .await;
+
+    todo!()
 }

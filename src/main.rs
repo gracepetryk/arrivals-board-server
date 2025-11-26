@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use axum::Router;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use diesel_async::AsyncPgConnection;
@@ -22,8 +23,6 @@ where
         return Self(value.into());
     }
 }
-
-type Result<T, E = AppError> = core::result::Result<T, E>;
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
@@ -62,8 +61,11 @@ async fn main() {
         db: get_connection_pool(connection_url).await.unwrap(),
     };
 
-    let app = router::route(context);
+    let api_router = router::api(context);
+
+    let router = api_router.nest("/docs/crate", router::crate_docs());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    println!("listening on port 8080");
+    axum::serve(listener, router).await.unwrap();
 }
