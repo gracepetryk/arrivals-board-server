@@ -27,6 +27,8 @@ dependencies = [
  "axum",
  "diesel",
  "diesel-async",
+ "http",
+ "regex",
  "serde",
  "serde_with",
  "strum",

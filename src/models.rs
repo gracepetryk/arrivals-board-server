@@ -4,7 +4,15 @@ use uuid::Uuid;
 
 use crate::schema::{tracking_params, users};
 
-#[derive(Queryable, Selectable, Identifiable, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(
+    Queryable,
+    Selectable,
+    Identifiable,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+    utoipa::ToResponse,
+)]
 pub struct User {
     id: Uuid,
     email: String,

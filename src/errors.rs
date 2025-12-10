@@ -1,70 +1,84 @@
-use std::fmt::Display;
+use std::fmt::Debug;
 
-use axum::{
-    Json,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
 use diesel_async::pooled_connection::bb8;
 use serde::Serialize;
-use serde_with::{DisplayFromStr, serde_as};
+use utoipa::{PartialSchema, ToSchema};
 
 #[derive(Debug, thiserror::Error)]
 #[error("An internal server error occured.")]
-pub enum GetRequestError {
-    DatabaseError(diesel::result::Error),
-    #[error("Requested item not found.")]
-    NotFound(diesel::result::Error),
+pub enum InternalServerErrorReason {
+    DatabaseError(#[from] diesel::result::Error),
     ConnectionError(#[from] bb8::RunError),
 }
 
-impl From<diesel::result::Error> for GetRequestError {
-    fn from(value: diesel::result::Error) -> Self {
-        match value {
-            diesel::result::Error::NotFound => Self::NotFound(value),
-            _ => Self::DatabaseError(value),
-        }
+impl PartialSchema for InternalServerErrorReason {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        "internal server error.".into()
     }
 }
 
-impl IntoResponse for GetRequestError {
-    fn into_response(self) -> Response {
-        let code = match self {
-            GetRequestError::DatabaseError(_) | GetRequestError::ConnectionError(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+impl ToSchema for InternalServerErrorReason {}
 
-            GetRequestError::NotFound(_) => StatusCode::NOT_FOUND,
-        };
-
-        eprintln!("{}", self);
-
-        (code, self.to_string()).into_response()
-    }
-}
-
-pub trait Stringify: Display + Send + Sync + 'static {}
-impl<T> Stringify for T where T: Display + Send + Sync + 'static {}
-
-#[serde_as]
-#[derive(Debug, utoipa::ToSchema, Serialize)]
-pub struct ErrorReason<T: Stringify> {
-    #[schema(minimum = 400, maximum = 599)]
-    status: u16,
-    #[serde_as(as = "DisplayFromStr")]
+#[derive(Debug, ToSchema, Serialize)]
+pub struct ReasonResponse<T: ToSchema + Serialize> {
     reason: T,
 }
 
-impl<T: Stringify> ErrorReason<T> {
-    pub fn new(status: u16, reason: T) -> Self {
-        Self { status, reason }
+impl<T: ToSchema + Serialize> From<T> for ReasonResponse<T> {
+    fn from(reason: T) -> Self {
+        ReasonResponse { reason }
     }
 }
 
-impl<T: Stringify> IntoResponse for ErrorReason<T> {
-    fn into_response(self) -> Response {
-        let code = StatusCode::try_from(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+#[macro_export]
+macro_rules! error_enum {
+    ($enum_name:ident {
+        $(
+            #[response(status = $status:path, description = $desc:literal $($_resp_attr:meta),* $(,)?)]
+            $variant:ident $(($field:tt))?
+        ),* $(,)?
+    }) => {
+        #[derive(Debug, utoipa::IntoResponses, thiserror::Error)]
+        enum $enum_name {
+            #[response(status = http::status::StatusCode::INTERNAL_SERVER_ERROR, description = "Internal server error.")]
+            #[error("Internal server error.")]
+            InternalServerError(#[to_schema] crate::errors::InternalServerErrorReason),
+            $(
+                #[response(status = $status, description = $desc, $($_resp_attr)*)]
+                #[error($desc)]
+                #[allow(dead_code)]
+                $variant $((#[to_schema] $crate::errors::ReasonResponse<$field>))?
+            ),*
+        }
 
-        (code, Json(self)).into_response()
-    }
+        impl<T: Into<InternalServerErrorReason>> From<T> for $enum_name {
+            fn from(value: T) -> Self {
+                <$enum_name>::InternalServerError(value.into())
+            }
+        }
+
+        impl axum::response::IntoResponse for $enum_name {
+            fn into_response(self) -> axum::response::Response {
+                macro_rules! match_arm {
+                    ($variant_status:path, $variant_desc:literal) => {
+                        ($variant_status, $variant_desc).into_response()
+                    };
+                    ($variant_status:path, $variant_desc:literal, $variant_field:tt) => {
+
+                        ($variant_status, axum::Json($variant_field)).into_response()
+                    }
+
+                }
+                match self {
+                    $enum_name::InternalServerError(_) => {
+                        (http::status::StatusCode::INTERNAL_SERVER_ERROR, "internal server error.").into_response()
+                    },
+                    $(
+                        #[allow(non_snake_case)]
+                        $enum_name::$variant$(($field))? => match_arm!($status, $desc $(,$field)?)
+                    ),*
+                }
+            }
+        }
+    };
 }

@@ -1,63 +1,60 @@
+use std::sync::LazyLock;
+
 use axum::{
     Json, debug_handler,
     extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
 };
 use diesel::{
     insert_into,
     prelude::*,
     result::{DatabaseErrorKind, Error::DatabaseError},
 };
-use diesel_async::{RunQueryDsl, pooled_connection::bb8};
-use serde::Deserialize;
-use strum::Display;
-use thiserror::Error;
+use diesel_async::RunQueryDsl;
+use http::StatusCode;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
-use uuid::Uuid;
 
 use crate::{
-    AppContext,
-    errors::{ErrorReason, GetRequestError},
+    AppContext, error_enum,
+    errors::{InternalServerErrorReason, ReasonResponse},
     models::User,
     schema::users,
 };
 
 pub fn router() -> OpenApiRouter<AppContext> {
-    return OpenApiRouter::new()
-        .routes(routes!(get_user, create_user))
-        .routes(routes!(get_all_users));
+    return OpenApiRouter::new().routes(routes!(get_user, create_user));
 }
 
-#[utoipa::path(get, path = "/", responses((status = OK, body = Vec<User>)))]
-async fn get_all_users(
-    State(app_context): State<AppContext>,
-) -> Result<Json<Vec<User>>, GetRequestError> {
-    let mut conn = app_context.db.get().await?;
-
-    let users: Vec<User> = users::table.load::<User>(&mut conn).await?;
-
-    return Ok(Json(users));
-}
+error_enum! { GetUserError {
+    #[response(status = StatusCode::NOT_FOUND, description = "User Not Found")]
+    NotFound
+}}
 
 #[utoipa::path(get, path = "/{id}", responses(
         (status = OK, body = User),
-        (status = NOT_FOUND, body = ErrorReason<String>)
+        GetUserError
 ))]
 async fn get_user(
     State(app_context): State<AppContext>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<User>, GetRequestError> {
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<User>, GetUserError> {
     let mut conn = app_context.db.get().await?;
 
     let user = users::table
         .select(User::as_select())
         .find(id)
         .first(&mut conn)
-        .await?;
+        .await
+        .map_err(|err| match err {
+            diesel::result::Error::NotFound => GetUserError::NotFound,
+            _ => err.into(),
+        })?;
 
-    return Ok(Json(user));
+    Ok(Json(user))
 }
+
 
 #[derive(Deserialize, Insertable, utoipa::ToSchema)]
 #[diesel(table_name = users)]
@@ -65,43 +62,32 @@ struct CreateUser {
     pub email: String,
 }
 
-#[derive(Debug, Display, Error, utoipa::ToSchema)]
-enum CreateUser4xxError {
-    UserAlreadyExists,
+
+#[derive(Debug, ToSchema, Serialize)]
+enum CreateUserBadRequest {
     InvalidEmail,
 }
 
-#[derive(Debug, Error)]
-#[error("An internal server error occured.")]
-enum CreateUserError {
-    DatabaseError(#[from] diesel::result::Error),
-    ConnectionError(#[from] bb8::RunError),
-    BadRequest(#[from] CreateUser4xxError),
-}
+error_enum! { CreateUserError {
+    #[response(status = StatusCode::CONFLICT, description = "User Already Exists")]
+    UserAlreadyExists,
 
-impl IntoResponse for CreateUserError {
-    fn into_response(self) -> axum::response::Response {
-        eprintln!("{:#?}", self);
-        let status = match &self {
-            CreateUserError::DatabaseError(_) | CreateUserError::ConnectionError(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
-            CreateUserError::BadRequest(_) => StatusCode::BAD_REQUEST,
-        };
+    #[response(status = StatusCode::BAD_REQUEST, description = "Bad Request")]
+    BadRequest(CreateUserBadRequest),
+}}
 
-        ErrorReason::new(status.into(), self).into_response()
-    }
-}
-
-#[utoipa::path(post, path = "/create", responses(
-        (status = OK, body = User),
-        (status = 400, body = ErrorReason<CreateUser4xxError>)
-))]
+#[utoipa::path(post, path = "/create", responses((status=200, response=User), CreateUserError))]
 #[debug_handler]
 async fn create_user(
     State(app_context): State<AppContext>,
     Json(user): Json<CreateUser>,
 ) -> Result<Json<User>, CreateUserError> {
+    if !is_valid_email(&user.email) {
+        return Err(CreateUserError::BadRequest(
+            CreateUserBadRequest::InvalidEmail.into(),
+        ));
+    }
+
     let mut conn = app_context.db.get().await?;
 
     let user = insert_into(users::table)
@@ -111,10 +97,34 @@ async fn create_user(
         .await;
 
     match user {
-        Ok(user) => Ok(user.into()),
+        Ok(user) => Ok(Json(user)),
         Err(DatabaseError(DatabaseErrorKind::UniqueViolation, _)) => {
-            Err(CreateUser4xxError::UserAlreadyExists.into())
+            Err(CreateUserError::UserAlreadyExists)
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+static EMAIL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[^@]+@[^@]+\.[^@]+$").unwrap());
+
+fn is_valid_email<'a>(email: &'a str) -> bool {
+    EMAIL_REGEX.is_match(email)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_valid_email() {
+        assert!(is_valid_email("me@gracepetryk.com"))
+    }
+
+    #[test]
+    fn test_is_valid_email_rejects_invalid() {
+        assert!(!is_valid_email("not_an_email"));
+        assert!(!is_valid_email("@@@"));
+        assert!(!is_valid_email("me@foo@foo@com"));
     }
 }

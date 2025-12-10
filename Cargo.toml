@@ -7,6 +7,8 @@ edition = "2024"
 axum = { version = "0.8.6", features = ["macros"] }
 diesel = { version = "2.3.3", features = ["postgres", "uuid"] }
 diesel-async = { version = "0.7.3", features = ["postgres", "bb8"] }
+http = "1.4.0"
+regex = "1.12.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_with = "3.16.1"
 strum = { version = "0.27.2", features = ["derive"] }
