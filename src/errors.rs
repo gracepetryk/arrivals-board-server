@@ -30,7 +30,6 @@ impl<T: ToSchema + Serialize> From<T> for ReasonResponse<T> {
     }
 }
 
-#[macro_export]
 macro_rules! error_enum {
     ($enum_name:ident {
         $(
@@ -42,7 +41,7 @@ macro_rules! error_enum {
         enum $enum_name {
             #[response(status = http::status::StatusCode::INTERNAL_SERVER_ERROR, description = "Internal server error.")]
             #[error("Internal server error.")]
-            InternalServerError(#[to_schema] crate::errors::InternalServerErrorReason),
+            InternalServerError(#[to_schema] $crate::errors::InternalServerErrorReason),
             $(
                 #[response(status = $status, description = $desc, $($_resp_attr)*)]
                 #[error($desc)]
@@ -51,7 +50,7 @@ macro_rules! error_enum {
             ),*
         }
 
-        impl<T: Into<InternalServerErrorReason>> From<T> for $enum_name {
+        impl<T: Into<$crate::errors::InternalServerErrorReason>> From<T> for $enum_name {
             fn from(value: T) -> Self {
                 <$enum_name>::InternalServerError(value.into())
             }
@@ -60,11 +59,12 @@ macro_rules! error_enum {
         impl axum::response::IntoResponse for $enum_name {
             fn into_response(self) -> axum::response::Response {
                 macro_rules! match_arm {
+
                     ($variant_status:path, $variant_desc:literal) => {
                         ($variant_status, $variant_desc).into_response()
                     };
-                    ($variant_status:path, $variant_desc:literal, $variant_field:tt) => {
 
+                    ($variant_status:path, $variant_desc:literal, $variant_field:tt) => {
                         ($variant_status, axum::Json($variant_field)).into_response()
                     }
 
@@ -82,3 +82,5 @@ macro_rules! error_enum {
         }
     };
 }
+
+pub(crate) use error_enum;

@@ -17,7 +17,7 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-    AppContext, error_enum, errors::InternalServerErrorReason, models::User, schema::users,
+    AppContext, errors::error_enum, models::User, schema::users,
 };
 
 pub fn router() -> OpenApiRouter<AppContext> {
