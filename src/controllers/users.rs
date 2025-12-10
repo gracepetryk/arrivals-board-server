@@ -17,10 +17,7 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-    AppContext, error_enum,
-    errors::{InternalServerErrorReason, ReasonResponse},
-    models::User,
-    schema::users,
+    AppContext, error_enum, errors::InternalServerErrorReason, models::User, schema::users,
 };
 
 pub fn router() -> OpenApiRouter<AppContext> {
@@ -55,13 +52,11 @@ async fn get_user(
     Ok(Json(user))
 }
 
-
 #[derive(Deserialize, Insertable, utoipa::ToSchema)]
 #[diesel(table_name = users)]
 struct CreateUser {
     pub email: String,
 }
-
 
 #[derive(Debug, ToSchema, Serialize)]
 enum CreateUserBadRequest {
