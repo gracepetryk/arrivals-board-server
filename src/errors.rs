@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use diesel_async::pooled_connection::bb8;
 use serde::Serialize;
-use utoipa::{PartialSchema, ToSchema};
+use utoipa::{PartialSchema, ToResponse, ToSchema};
 
 #[derive(Debug, thiserror::Error)]
 #[error("An internal server error occured.")]
@@ -19,8 +19,9 @@ impl PartialSchema for InternalServerErrorReason {
 
 impl ToSchema for InternalServerErrorReason {}
 
-#[derive(Debug, ToSchema, Serialize)]
+#[derive(Debug, ToSchema, ToResponse, Serialize)]
 pub struct ReasonResponse<T: ToSchema + Serialize> {
+    #[schema(inline)]
     reason: T,
 }
 
@@ -31,22 +32,20 @@ impl<T: ToSchema + Serialize> From<T> for ReasonResponse<T> {
 }
 
 macro_rules! error_enum {
-    ($enum_name:ident {
+    ($v:vis $enum_name:ident {
         $(
             #[response(status = $status:path, description = $desc:literal $($_resp_attr:meta),* $(,)?)]
-            $variant:ident $(($field:tt))?
+            $variant:ident $(($field:ty))?
         ),* $(,)?
     }) => {
-        #[derive(Debug, utoipa::IntoResponses, thiserror::Error)]
-        enum $enum_name {
-            #[response(status = http::status::StatusCode::INTERNAL_SERVER_ERROR, description = "Internal server error.")]
+        #[derive(Debug, thiserror::Error)]
+        $v enum $enum_name {
             #[error("Internal server error.")]
-            InternalServerError(#[to_schema] $crate::errors::InternalServerErrorReason),
+            InternalServerError($crate::errors::InternalServerErrorReason),
             $(
-                #[response(status = $status, description = $desc, $($_resp_attr)*)]
                 #[error($desc)]
                 #[allow(dead_code)]
-                $variant $((#[to_schema] $crate::errors::ReasonResponse<$field>))?
+                $variant $(($crate::errors::ReasonResponse<$field>))?
             ),*
         }
 
@@ -56,26 +55,60 @@ macro_rules! error_enum {
             }
         }
 
+        impl utoipa::IntoResponses for $enum_name {
+            #[allow(unused_imports)]
+            fn responses() -> std::collections::BTreeMap<String, utoipa::openapi::RefOr<utoipa::openapi::response::Response>> {
+                use utoipa::openapi::{ResponsesBuilder, ResponseBuilder, ContentBuilder};
+                use utoipa::PartialSchema;
+                use $crate::errors::ReasonResponse;
+
+                ResponsesBuilder::new()
+                    $(
+                        .response(
+                        $status.to_string(),
+                        ResponseBuilder::new()
+                        .description($desc)
+                        $( .content("application/json", ContentBuilder::new()
+                            .schema(Some(ReasonResponse::<$field>::schema()))
+                            .build()) )?
+                        )
+
+                    )*
+                    .build().into()
+            }
+        }
+
         impl axum::response::IntoResponse for $enum_name {
             fn into_response(self) -> axum::response::Response {
+                macro_rules! match_pattern {
+                    ($enum_name::$variant_name:ident) => { $enum_name::$variant_name };
+                    ($enum_name::$variant_name:ident($variant_field:ty, $capture:ident)) => {
+                        $enum_name::$variant_name($capture)
+                    }
+                }
+
                 macro_rules! match_arm {
 
                     ($variant_status:path, $variant_desc:literal) => {
                         ($variant_status, $variant_desc).into_response()
                     };
 
-                    ($variant_status:path, $variant_desc:literal, $variant_field:tt) => {
-                        ($variant_status, axum::Json($variant_field)).into_response()
+                    ($variant_status:path, $variant_desc:literal, $variant_field:ty, $capture:ident) => {
+                        ($variant_status, axum::Json($capture)).into_response()
                     }
-
                 }
+
                 match self {
                     $enum_name::InternalServerError(_) => {
-                        (http::status::StatusCode::INTERNAL_SERVER_ERROR, "internal server error.").into_response()
+                        (
+                            http::status::StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal server error."
+                        ).into_response()
                     },
                     $(
-                        #[allow(non_snake_case)]
-                        $enum_name::$variant$(($field))? => match_arm!($status, $desc $(,$field)?)
+                        match_pattern!( $enum_name::$variant $( ($field, t) )? )=> {
+                            match_arm!($status, $desc $(,$field, t)?)
+                        }
                     ),*
                 }
             }

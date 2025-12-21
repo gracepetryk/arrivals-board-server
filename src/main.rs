@@ -26,7 +26,7 @@ async fn get_connection_pool(connection_url: String) -> Result<Pool<AsyncPgConne
 
 #[tokio::main]
 async fn main() {
-    let connection_url = std::env::var("DATABASE_URL").unwrap();
+    let connection_url = env!("DATABASE_URL").to_string();
 
     let context = AppContext {
         db: get_connection_pool(connection_url).await.unwrap(),

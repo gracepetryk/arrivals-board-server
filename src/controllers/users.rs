@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use axum::{
-    Json, debug_handler,
+    Json,
     extract::{Path, State},
 };
 use diesel::{
@@ -16,9 +16,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{
-    AppContext, errors::error_enum, models::User, schema::users,
-};
+use crate::{AppContext, errors::error_enum, models::User, schema::users};
 
 pub fn router() -> OpenApiRouter<AppContext> {
     return OpenApiRouter::new().routes(routes!(get_user, create_user));
@@ -71,8 +69,7 @@ error_enum! { CreateUserError {
     BadRequest(CreateUserBadRequest),
 }}
 
-#[utoipa::path(post, path = "/create", responses((status=200, response=User), CreateUserError))]
-#[debug_handler]
+#[utoipa::path(post, path = "/create", responses((status=OK, body=User), CreateUserError))]
 async fn create_user(
     State(app_context): State<AppContext>,
     Json(user): Json<CreateUser>,

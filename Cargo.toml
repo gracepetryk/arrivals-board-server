@@ -15,7 +15,8 @@ strum = { version = "0.27.2", features = ["derive"] }
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["rt-multi-thread"]}
 tower-http = { version = "0.6.7", features = ["fs"] }
-utoipa = { version = "5.4.0", features = ["macros", "axum_extras", "uuid", "url", "preserve_order"] }
+url = "2.5.7"
+utoipa = { version = "5.4.0", features = ["macros", "axum_extras", "uuid", "url", "preserve_order", "config"] }
 utoipa-axum = "0.2.0"
 utoipa-rapidoc = { version = "6.0.0", features = ["axum"] }
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
